@@ -1,0 +1,12 @@
+:auto USING PERIODIC COMMIT 2000
+LOAD CSV WITH HEADERS FROM 'https://neo4jdata.blob.core.windows.net/graph-poc/data_0_0_0.csv' AS row
+FIELDTERMINATOR '|'
+Create (m:MERCHANT{ARM_MERCHANT_NAME: row.ARM_MERCHANT_NAME, 
+                   MERCHANT_NAME: row.MERCHANT_NAME,
+				   ARM_MERCHANT_ID: row.ARM_MERCHANT_ID,
+				   MERCHANT_XID: row.MERCHANT_XID,
+                   MERCHANT_CATEGORY_XCD: row.MERCHANT_CATEGORY_XCD,
+                   MERCHANT_POSTAL_XCD: toInteger(row.MERCHANT_POSTAL_XCD),
+                   MERCHANT_CITY_NAME : row.MERCHANT_CITY_NAME,
+                   MERCHANT_COUNTRY_XCD: row.MERCHANT_COUNTRY_XCD
+                   });

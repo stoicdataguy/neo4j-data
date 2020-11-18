@@ -1,0 +1,128 @@
+
+USR: neo4j
+PSWD: carloads-sheds-geography
+
+// :play https://guides.neo4j.com/sandbox/fraud-detection/index.html
+
+// CHECK DB SCHEMA
+
+	CALL db.schema()
+
+// GET SUMMARY OF DIFF. TYPE OF TRANSACTIONS
+
+	MATCH (t:Transaction)
+	WITH sum(t.amount) AS globalSum, count(t) AS globalCnt
+	WITH *, 10^3 AS scaleFactor
+	UNWIND ['CashIn', 'CashOut', 'Payment', 'Debit', 'Transfer'] AS txType
+	  CALL apoc.cypher.run('MATCH (t:' + txType + ')
+		RETURN sum(t.amount) as txAmount, count(t) AS txCnt', {})
+	  YIELD value
+	RETURN txType,value.txAmount AS TotalMarketValue,
+	  100*round(scaleFactor*(toFloat(value.txAmount)/toFloat(globalSum)))
+		/scaleFactor AS `%MarketValue`,
+	  100*round(scaleFactor*(toFloat(value.txCnt)/toFloat(globalCnt)))
+		/scaleFactor AS `%MarketTransactions`,
+	  toInteger(toFloat(value.txAmount)/toFloat(value.txCnt)) AS AvgTransactionValue,
+	  value.txCnt AS NumberOfTransactions
+	ORDER BY `%MarketTransactions` DESC
+
+
+// # OF ATTRIBUTES SHARED PER PAIR OF CLIENT NODES
+
+	MATCH (c1:Client)-[:HAS_EMAIL|:HAS_PHONE|:HAS_SSN]->(info)
+	<-[:HAS_EMAIL|:HAS_PHONE|:HAS_SSN]-(c2:Client)
+	WHERE c1.id<>c2.id
+	RETURN c1.id,c2.id,count(*) AS freq ORDER BY freq DESC
+
+// # OF DISTINCT CLIENTS WITH SHARED PIIs
+
+	MATCH (c1:Client)-[:HAS_EMAIL|:HAS_PHONE|:HAS_SSN]->(info)
+	<-[:HAS_EMAIL|:HAS_PHONE|:HAS_SSN]-(c2:Client)
+	WHERE c1.id<>c2.id
+	RETURN count(DISTINCT c1.id) AS freq
+
+// CREATE "SHARED_IDENTIFIER" ATTRIBUTE
+
+	MATCH (c1:Client)-[:HAS_EMAIL|:HAS_PHONE|:HAS_SSN]->(info)
+	<-[:HAS_EMAIL|:HAS_PHONE|:HAS_SSN]-(c2:Client)
+	WHERE c1.id<>c2.id
+	WITH c1, c2, count(*) as cnt
+	MERGE (c1) - [:SHARED_IDENTIFIERS {count: cnt}] - (c2)
+
+// VISUALIZE - Shared PII attributes
+
+	MATCH p = (c:Client) - [s:SHARED_IDENTIFIERS] - () WHERE s.count >= 2 RETURN p limit 25
+
+// MEMORY ESTIMATION
+
+	CALL gds.graph.create.cypher.estimate(
+	'MATCH (c:Client) RETURN id(c) AS id',
+	'MATCH (c1:Client)-[r:SHARED_IDENTIFIERS]-(c2:Client)
+	WHERE c1.id<>c2.id
+	RETURN id(c1) AS source,id(c2) AS target,r.count AS weight')
+	YIELD requiredMemory,nodeCount,relationshipCount
+
+// Check available Graphs (esp. for In Memory Graphs) 
+
+	CALL gds.graph.list()
+
+// Create In-Memory Graph for running WCC
+
+	CALL gds.graph.create('WCC', 'Client',
+		{
+			SHARED_IDENTIFIERS:{
+				type: 'SHARED_IDENTIFIERS',
+				properties: {
+					count: {
+						property: 'count'
+					}
+				}
+			}
+		}
+	) YIELD graphName,nodeCount,relationshipCount,createMillis
+
+
+// MEMORY ESTIMATION - Run Weakly Connected Components (WCC)
+
+	CALL gds.wcc.stream.estimate('WCC')
+
+// STATS  - Run Weakly Connected Components 
+
+	CALL gds.wcc.stats('WCC')
+
+// CHECK  - Run WCC
+
+	CALL gds.wcc.stream('WCC')
+	YIELD componentId,nodeId
+	WITH componentId AS cluster,gds.util.asNode(nodeId) AS client
+	WITH cluster,collect(client.id) AS clients
+	WITH *,size(clients) AS clusterSize
+	WHERE clusterSize>1
+	RETURN cluster,clusterSize,clients
+	ORDER by clusterSize DESC
+
+
+// ASSIGN - Run WCC
+
+	CALL gds.wcc.stream('WCC')
+	YIELD componentId,nodeId
+	WITH componentId AS cluster,gds.util.asNode(nodeId) AS client
+	WITH cluster, collect(client.id) AS clients
+	WITH *,size(clients) AS clusterSize
+	WHERE clusterSize>1
+	UNWIND clients AS client
+	MATCH(c:Client)
+	WHERE c.id=client
+	SET c.firstPartyFraudGroup=cluster
+
+// VISUALIZE - WCC
+
+	MATCH (c:Client)
+	WITH c.firstPartyFraudGroup AS fpGroupID, collect(c.id) AS fGroup
+	WITH *, size(fGroup) AS groupSize WHERE groupSize >= 9
+	WITH collect(fpGroupID) AS fraudRings
+	MATCH p=(c:Client)-[:HAS_SSN|HAS_EMAIL|HAS_PHONE]->()
+	WHERE c.firstPartyFraudGroup IN fraudRings
+	RETURN p
+
+// 

@@ -1,0 +1,249 @@
+// 1. Loading Dataset
+
+	LOAD CSV WITH HEADERS FROM 'file:///atms.csv' as row 
+	Create (atm:ATM{ID: row.ID, 
+					Latitude: tofloat(row.latitude), 
+					Longitude: tofloat(row.longitude)});
+
+
+	LOAD CSV WITH HEADERS FROM 'file:///clients.csv' as row 
+	Create (c:Client{ID: row.ID, 
+					First_Name: row.first_name, 
+					Last_Name: row.last_name,
+					 Age: toInteger(row.age),
+					 Email: row.email,
+					 Occupation: row.occupation,
+					 Political_Views: row.political_views,
+					 Nationality: row.nationality,
+					 University: row.university,
+					 Academic_Degree:row.academic_degree,
+					 Address: row.address,
+					 Postal_Code: row.postal_code,
+					 Address: row.address,
+					 Country: row.country,
+					 City: row.city});
+
+	LOAD CSV WITH HEADERS FROM 'file:///companies.csv' as row 
+	Create (C:Company{Name: row.name,
+					  ID: row.ID, 
+					 Type: row.type, 
+					  Country: row.country});
+
+	:auto USING PERIODIC COMMIT 2000
+	LOAD CSV WITH HEADERS FROM 'file:///transactions.csv' as row 
+	FIELDTERMINATOR '|'
+	Create (T:Transaction{src: row.source,
+						  id: row.id,
+						  tgt: row.target, 
+						 date: date(row.date), 
+						  time: row.time,
+						  amt: toFloat(row.amount), 
+						  curr: row.currency,
+						  type: row.TYPE});
+						  
+	:auto USING PERIODIC COMMIT 500
+	LOAD CSV WITH HEADERS FROM 'file:///trx_pattern_01.csv' as row 
+	FIELDTERMINATOR '|'
+	Create (T:Transaction{src: row.source,
+						  id: row.id,
+						  tgt: row.target, 
+						  date: date(row.date), 
+						  time: row.time,
+						  amt: toFloat(row.amount), 
+						  curr: row.currency,
+						  type: row.TYPE});
+						  
+	:auto USING PERIODIC COMMIT 500
+	LOAD CSV WITH HEADERS FROM 'file:///trx_pattern_02.csv' as row 
+	FIELDTERMINATOR '|'
+	Create (T:Transaction{src: row.source,
+						  id: row.id,
+						  tgt: row.target, 
+						  date: date(row.date), 
+						  time: row.time,
+						  amt: toFloat(row.amount), 
+						  curr: row.currency,
+						  type: row.TYPE});
+
+// 2. IN Relationships
+
+	CALL apoc.periodic.iterate(
+	"MATCH (c:Client), (t: Transaction) 
+	 where c.ID = t.tgt
+	 return c,t",
+	"MERGE (c)-[:IN]->(t)",
+	{ batchSize: 1000, parallel: false}
+	);
+
+	CALL apoc.periodic.iterate(
+	"MATCH (C:Company), (t: Transaction) 
+	 where C.ID = t.tgt
+	 return C,t",
+	"MERGE (C)-[:IN]->(t)",
+	{ batchSize: 1000, parallel: false}
+	);
+
+	CALL apoc.periodic.iterate(
+	"MATCH (A:ATM), (t: Transaction) 
+	 where A.ID = t.tgt
+	 return A,t",
+	"MERGE (A)-[:IN]->(t)",
+	{ batchSize: 1000, parallel: false}
+	)
+
+//3. OUT Relationships
+
+	CALL apoc.periodic.iterate(
+	"MATCH (c:Client), (t: Transaction) 
+	 where c.ID = t.src
+	 return c,t",
+	"MERGE (c)-[:OUT]->(t)",
+	{ batchSize: 1000, parallel: false}
+	);
+
+	CALL apoc.periodic.iterate(
+	"MATCH (C:Company), (t: Transaction) 
+	 where C.ID = t.src
+	 return C,t",
+	"MERGE (C)-[:OUT]->(t)",
+	{ batchSize: 1000, parallel: false}
+	)
+
+// *4. Delete All Transactions
+
+	CALL apoc.periodic.iterate( "MATCH (t: Transaction) return t", "DETACH DELETE t", { batchSize: 1000, parallel: false} )
+
+
+//5. HOP Relationships
+
+	CALL apoc.periodic.iterate(
+		"MATCH (t1:Transaction)<-[:IN]-(c)-[:OUT]->(t2:Transaction)
+		 WHERE (c:Client)
+		   AND t1.date < t2.date
+		   AND abs(t1.amt - t2.amt) / t1.amt <= 0.15
+		   AND duration.inDays(t1.date, t2.date).days < 60
+		 RETURN t1, t2",
+		"MERGE (t1)-[:HOP]->(t2)",
+	  { batchSize: 1000, parallel: false });
+	  
+	CALL apoc.periodic.iterate(
+		"MATCH (t1:Transaction)<-[:IN]-(c)-[:OUT]->(t2:Transaction)
+		 WHERE (c:Company)
+		   AND t1.date < t2.date
+		   AND abs(t1.amt - t2.amt) / t1.amt <= 0.15
+		   AND duration.inDays(t1.date, t2.date).days < 60
+		 RETURN t1, t2",
+		"MERGE (t1)-[:HOP]->(t2)",
+	  { batchSize: 1000, parallel: false })
+  
+//*5a. Delete All Hops
+
+	CALL apoc.periodic.iterate( 
+		"MATCH ()-[r:HOP]->()
+		 RETURN r", 
+		"DELETE r", 
+		{ batchSize: 1000, parallel: false} )  
+  
+ //6. Traverse HOP Relationships - Pattern 01
+
+	MATCH path = (c:Client)-[:OUT]->(t1:Transaction)-[:HOP*4..10]->(t2:Transaction)<-[:IN]-(c:Client)
+	RETURN path 
+	LIMIT 20;
+
+//7. Create IS_RELATED Relationship
+
+	LOAD CSV WITH HEADERS FROM 'file:///is_related_pattern_02.csv' as row 
+	FIELDTERMINATOR '|'
+	MATCH (c:Client {id:row.client}), (C:Company {id:row.comp})
+	CREATE (c)-[:IS_RELATED]->(C);
+
+//8. Traverse HOP Relationships - Pattern 02
+
+	MATCH path = (C:Company)<-[:IS_RELATED]-(c:Client)-[:OUT]->(t1:Transaction)-[:HOP*4..10]->(t2:Transaction)<-[:IN]-(C:Company)
+	RETURN path 
+	LIMIT 20;
+
+//9. Community Detection
+
+///9.x Create Relationship
+	MATCH (c1:Client)-[:OUT]->(t:Transaction)<-[:IN]-(c2:Client) 
+	WHERE t.amt > 500 
+	MERGE (c1)-[:TRX_GT_500]->(c2);
+
+////9.1 Clustering Coefficients
+
+(NATURAL, REVERSE, UNDIRECTED)
+
+CALL gds.localClusteringCoefficient.stream({
+	nodeProjection: "Client",
+	relationshipProjection: {
+		HAS_TRANSACTED: {
+			type: "HAS_TRANSACTED",
+			orientation: "UNDIRECTED" 
+		}
+	}
+})
+YIELD nodeId, localClusteringCoefficient
+WHERE localClusteringCoefficient < 0.5
+RETURN gds.util.asNode(nodeId).ID AS ID,
+	   gds.util.asNode(nodeId).First_Name AS First_Name,
+	   gds.util.asNode(nodeId).Last_Name AS Last_Name,
+	   gds.util.asNode(nodeId).Age AS Age,
+	   gds.util.asNode(nodeId).Email AS Email,
+	   localClusteringCoefficient
+ORDER BY localClusteringCoefficient
+LIMIT 5;
+
+///9.2 Strongly Connected Components
+
+
+///9.3 Clustering
+
+CALL gds.labelPropagation.stream({
+  nodeProjection: "Client",
+  relationshipProjection: "TRX_GT_500",
+  maxIterations: 10
+})
+YIELD nodeId, communityId
+RETURN communityId AS label,
+       collect(gds.util.asNode(nodeId).First_Name) AS libraries
+ORDER BY size(libraries) DESC;
+
+///9.4 PageRank: Important Nodes
+
+CALL gds.pageRank.stream({
+  nodeProjection: "Client",
+  relationshipProjection: "TRX_GT_50k",
+  maxIterations: 20
+})
+YIELD nodeId, score
+RETURN gds.util.asNode(nodeId).ID AS ID, score
+ORDER BY score DESC
+
+---------------------------------------------------
+
+CALL db.schema.visualization()
+
+MATCH path = (c:Client)-[:OUT]->(t1:Transaction)-[:HOP*4..10]->(t2:Transaction)<-[:IN]-(c:Client) 
+RETURN path 
+LIMIT 20;
+
+MATCH path = (c:Client)-[:OUT]->(t1:Transaction)-[:HOP*4..10]->(t2:Transaction)<-[:IN]-(c:Client)
+WHERE c.ID = ''
+RETURN path;
+\\WHERE c.ID = 'e53b0ced-501e-4fe3-b55f-e4cc670a9629'
+
+
+MATCH path = (C:Company)<-[:IS_RELATED]-(c:Client)-[:OUT]->(t1:Transaction)-[:HOP*4..10]->(t2:Transaction)<-[:IN]-(C:Company)
+RETURN path 
+LIMIT 20;
+
+MATCH path = (C:Company)<-[:IS_RELATED]-(c:Client)-[:OUT]->(t1:Transaction)-[:HOP*4..10]->(t2:Transaction)<-[:IN]-(C:Company)
+WHERE c.ID = 'f72f071c-4e7f-47ad-9de6-5d39441b7b41'
+RETURN path;
+
+
+
+
+
+

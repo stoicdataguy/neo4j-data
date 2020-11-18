@@ -1,0 +1,32 @@
+//1.Connect all Trx
+
+MATCH (n:Transaction) RETURN n LIMIT 25
+
+//2. Show Schema (Explain Nodes)
+
+CALL db.schema.visualization()
+
+//3. Scenario - 1 (Multi)
+
+MATCH path = (c:Client)-[:OUT]->(t1:Transaction)-[:HOP*4..10]->(t2:Transaction)<-[:IN]-(c:Client) 
+RETURN path 
+LIMIT 20;
+ 
+//4. Scenario - 1 (Single)
+
+MATCH path = (c:Client)-[:OUT]->(t1:Transaction)-[:HOP*4..10]->(t2:Transaction)<-[:IN]-(c:Client)
+WHERE c.ID = 'e53b0ced-501e-4fe3-b55f-e4cc670a9629'
+RETURN path;
+
+//5. Scenario - 2 (Multi)
+
+MATCH path = (C:Company)<-[:IS_RELATED]-(c:Client)-[:OUT]->(t1:Transaction)-[:HOP*4..10]->(t2:Transaction)<-[:IN]-(C:Company)
+RETURN path 
+LIMIT 20;
+
+//6. Scenario - 2 (Multi)
+
+MATCH path = (C:Company)<-[:IS_RELATED]-(c:Client)-[:OUT]->(t1:Transaction)-[:HOP*4..10]->(t2:Transaction)<-[:IN]-(C:Company)
+WHERE c.ID = 'f72f071c-4e7f-47ad-9de6-5d39441b7b41'
+RETURN path;
+
